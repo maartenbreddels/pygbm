@@ -6,7 +6,7 @@ import pytest
 from pygbm.splitting import _find_histogram_split
 from pygbm.splitting import (SplittingContext, find_node_split,
                              find_node_split_subtraction,
-                             split_indices)
+                             split_indices_parallel, split_indices_single_thread)
 
 
 @pytest.mark.parametrize('n_bins', [3, 32, 256])
@@ -39,7 +39,8 @@ def test_histogram_split(n_bins):
                                        all_gradients, all_hessians,
                                        l2_regularization,
                                        min_hessian_to_split,
-                                       min_samples_leaf, min_gain_to_split)
+                                       min_samples_leaf, min_gain_to_split,
+                                       True)
 
             split_info, _ = _find_histogram_split(context, feature_idx,
                                                   sample_indices)
@@ -85,7 +86,7 @@ def test_split_vs_split_subtraction(constant_hessian):
                                n_bins_per_feature,
                                all_gradients, all_hessians,
                                l2_regularization, min_hessian_to_split,
-                               min_samples_leaf, min_gain_to_split)
+                               min_samples_leaf, min_gain_to_split, True)
 
     mask = rng.randint(0, 2, n_samples).astype(np.bool)
     sample_indices_left = sample_indices[mask]
@@ -165,7 +166,7 @@ def test_gradient_and_hessian_sanity(constant_hessian):
                                n_bins_per_feature,
                                all_gradients, all_hessians,
                                l2_regularization, min_hessian_to_split,
-                               min_samples_leaf, min_gain_to_split)
+                               min_samples_leaf, min_gain_to_split, True)
 
     mask = rng.randint(0, 2, n_samples).astype(np.bool)
     sample_indices_left = sample_indices[mask]
@@ -261,7 +262,7 @@ def test_split_indices():
                                n_bins_per_feature,
                                all_gradients, all_hessians,
                                l2_regularization, min_hessian_to_split,
-                               min_samples_leaf, min_gain_to_split)
+                               min_samples_leaf, min_gain_to_split, True)
 
     assert_array_almost_equal(sample_indices, context.partition)
     si_root, _ = find_node_split(context, sample_indices)
@@ -270,7 +271,7 @@ def test_split_indices():
     assert si_root.feature_idx == 1
     assert si_root.bin_idx == 3
 
-    samples_left, samples_right = split_indices(
+    samples_left, samples_right = split_indices_parallel(
         context, si_root, context.partition.view())
     assert set(samples_left) == set([0, 1, 3, 4, 5, 6, 8])
     assert set(samples_right) == set([2, 7, 9])
@@ -286,6 +287,12 @@ def test_split_indices():
     # count statistics anticipated when looking for the best split.
     assert samples_left.shape[0] == si_root.n_samples_left
     assert samples_right.shape[0] == si_root.n_samples_right
+
+    samples_left_single_thread, samples_right_single_thread = split_indices_single_thread(
+        context, si_root, context.partition.view())
+
+    assert samples_left.tolist() == samples_left_single_thread.tolist()
+    assert samples_right.tolist() == samples_right_single_thread.tolist()
 
 
 def test_min_gain_to_split():
@@ -314,7 +321,7 @@ def test_min_gain_to_split():
                                all_gradients, all_hessians,
                                l2_regularization,
                                min_hessian_to_split,
-                               min_samples_leaf, min_gain_to_split)
+                               min_samples_leaf, min_gain_to_split, True)
 
     split_info, _ = _find_histogram_split(context, feature_idx, sample_indices)
     assert split_info.gain == -1

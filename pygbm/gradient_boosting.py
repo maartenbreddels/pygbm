@@ -26,7 +26,7 @@ class BaseGradientBoostingMachine(BaseEstimator, ABC):
     def __init__(self, loss, learning_rate, max_iter, max_leaf_nodes,
                  max_depth, min_samples_leaf, l2_regularization, max_bins,
                  scoring, validation_split, n_iter_no_change, tol, verbose,
-                 random_state):
+                 random_state, parallel_splitting):
         self.loss = loss
         self.learning_rate = learning_rate
         self.max_iter = max_iter
@@ -41,6 +41,7 @@ class BaseGradientBoostingMachine(BaseEstimator, ABC):
         self.tol = tol
         self.verbose = verbose
         self.random_state = random_state
+        self.parallel_splitting = parallel_splitting
 
     def _validate_parameters(self, X):
         """Validate parameters passed to __init__.
@@ -249,7 +250,8 @@ class BaseGradientBoostingMachine(BaseEstimator, ABC):
                     max_depth=self.max_depth,
                     min_samples_leaf=self.min_samples_leaf,
                     l2_regularization=self.l2_regularization,
-                    shrinkage=self.learning_rate)
+                    shrinkage=self.learning_rate,
+                    parallel_splitting=self.parallel_splitting)
                 grower.grow()
 
                 acc_apply_split_time += grower.total_apply_split_time
@@ -524,7 +526,8 @@ class GradientBoostingRegressor(BaseGradientBoostingMachine, RegressorMixin):
                  max_iter=100, max_leaf_nodes=31, max_depth=None,
                  min_samples_leaf=20, l2_regularization=0., max_bins=256,
                  scoring=None, validation_split=0.1, n_iter_no_change=5,
-                 tol=1e-7, verbose=0, random_state=None):
+                 tol=1e-7, verbose=0, random_state=None,
+                 parallel_splitting=True):
         super(GradientBoostingRegressor, self).__init__(
             loss=loss, learning_rate=learning_rate, max_iter=max_iter,
             max_leaf_nodes=max_leaf_nodes, max_depth=max_depth,
@@ -532,7 +535,7 @@ class GradientBoostingRegressor(BaseGradientBoostingMachine, RegressorMixin):
             l2_regularization=l2_regularization, max_bins=max_bins,
             scoring=scoring, validation_split=validation_split,
             n_iter_no_change=n_iter_no_change, tol=tol, verbose=verbose,
-            random_state=random_state)
+            random_state=random_state, parallel_splitting=parallel_splitting)
 
     def predict(self, X):
         """Predict values for X.
@@ -644,7 +647,7 @@ class GradientBoostingClassifier(BaseGradientBoostingMachine, ClassifierMixin):
                  max_leaf_nodes=31, max_depth=None, min_samples_leaf=20,
                  l2_regularization=0., max_bins=256, scoring=None,
                  validation_split=0.1, n_iter_no_change=5, tol=1e-7,
-                 verbose=0, random_state=None):
+                 verbose=0, random_state=None, parallel_splitting=True):
         super(GradientBoostingClassifier, self).__init__(
             loss=loss, learning_rate=learning_rate, max_iter=max_iter,
             max_leaf_nodes=max_leaf_nodes, max_depth=max_depth,
@@ -652,7 +655,7 @@ class GradientBoostingClassifier(BaseGradientBoostingMachine, ClassifierMixin):
             l2_regularization=l2_regularization, max_bins=max_bins,
             scoring=scoring, validation_split=validation_split,
             n_iter_no_change=n_iter_no_change, tol=tol, verbose=verbose,
-            random_state=random_state)
+            random_state=random_state, parallel_splitting=parallel_splitting)
 
     def predict(self, X):
         """Predict classes for X.
