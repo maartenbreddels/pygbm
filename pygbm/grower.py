@@ -8,7 +8,8 @@ from heapq import heappush, heappop
 import numpy as np
 from time import time
 
-from .splitting import (SplittingContext, split_indices, find_node_split,
+from .splitting import (SplittingContext, split_indices_parallel,
+                        split_indices_single_thread, find_node_split,
                         find_node_split_subtraction)
 from .predictor import TreePredictor, PREDICTOR_RECORD_DTYPE
 
@@ -163,7 +164,8 @@ class TreeGrower:
     def __init__(self, X_binned, gradients, hessians, max_leaf_nodes=None,
                  max_depth=None, min_samples_leaf=20, min_gain_to_split=0.,
                  max_bins=256, n_bins_per_feature=None, l2_regularization=0.,
-                 min_hessian_to_split=1e-3, shrinkage=1.):
+                 min_hessian_to_split=1e-3, shrinkage=1.,
+                 parallel_splitting=True):
 
         self._validate_parameters(X_binned, max_leaf_nodes, max_depth,
                                   min_samples_leaf, min_gain_to_split,
@@ -180,13 +182,14 @@ class TreeGrower:
         self.splitting_context = SplittingContext(
             X_binned, max_bins, n_bins_per_feature, gradients,
             hessians, l2_regularization, min_hessian_to_split,
-            min_samples_leaf, min_gain_to_split)
+            min_samples_leaf, min_gain_to_split, parallel_splitting)
         self.max_leaf_nodes = max_leaf_nodes
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.X_binned = X_binned
         self.min_gain_to_split = min_gain_to_split
         self.shrinkage = shrinkage
+        self.parallel_splitting = parallel_splitting
         self.splittable_nodes = []
         self.finalized_leaves = []
         self.total_find_split_time = 0.  # time spent finding the best splits
@@ -336,6 +339,7 @@ class TreeGrower:
         node = heappop(self.splittable_nodes)
 
         tic = time()
+        split_indices = split_indices_parallel if self.parallel_splitting else split_indices_single_thread
         (sample_indices_left, sample_indices_right) = split_indices(
             self.splitting_context, node.split_info, node.sample_indices)
         toc = time()

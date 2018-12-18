@@ -85,7 +85,7 @@ pygbm_model = GradientBoostingClassifier(loss='binary_crossentropy',
                                          max_leaf_nodes=n_leaf_nodes,
                                          n_iter_no_change=None,
                                          random_state=0,
-                                         verbose=1)
+                                         verbose=1, parallel_splitting=False)
 pygbm_model.fit(data_train, target_train)
 toc = time()
 predicted_test = pygbm_model.predict(data_test)

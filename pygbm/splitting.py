@@ -6,7 +6,7 @@
   into the newly created left and right childs.
 """
 import numpy as np
-from numba import njit, jitclass, prange, float32, uint8, uint32
+from numba import njit, jitclass, prange, float32, uint8, uint32, bool_
 import numba
 
 from .histogram import _build_histogram
@@ -88,6 +88,7 @@ class SplitInfo:
     ('partition', uint32[::1]),
     ('left_indices_buffer', uint32[::1]),
     ('right_indices_buffer', uint32[::1]),
+    ('parallel_splitting', bool_)
 ])
 class SplittingContext:
     """Pure data class defining a splitting context.
@@ -128,7 +129,7 @@ class SplittingContext:
     def __init__(self, X_binned, max_bins, n_bins_per_feature,
                  gradients, hessians, l2_regularization,
                  min_hessian_to_split=1e-3, min_samples_leaf=20,
-                 min_gain_to_split=0.):
+                 min_gain_to_split=0., parallel_splitting=True):
 
         self.X_binned = X_binned
         self.n_features = X_binned.shape[1]
@@ -148,6 +149,7 @@ class SplittingContext:
         self.min_hessian_to_split = min_hessian_to_split
         self.min_samples_leaf = min_samples_leaf
         self.min_gain_to_split = min_gain_to_split
+        self.parallel_splitting = parallel_splitting
         if self.constant_hessian:
             self.constant_hessian_value = self.hessians[0]  # 1 scalar
         else:
@@ -163,16 +165,18 @@ class SplittingContext:
         # we have 2 leaves, the left one is at position 0 and the second one at
         # position 3. The order of the samples is irrelevant.
         self.partition = np.arange(0, X_binned.shape[0], 1, np.uint32)
-        # buffers used in split_indices to support parallel splitting.
-        self.left_indices_buffer = np.empty_like(self.partition)
-        self.right_indices_buffer = np.empty_like(self.partition)
+        if self.parallel_splitting:
+            # buffers used in split_indices_parallel to support parallel
+            # splitting.
+            self.right_indices_buffer = np.empty_like(self.partition)
+            self.left_indices_buffer = np.empty_like(self.partition)
 
 
 @njit(parallel=True,
       locals={'sample_idx': uint32,
               'left_count': uint32,
               'right_count': uint32})
-def split_indices(context, split_info, sample_indices):
+def split_indices_parallel(context, split_info, sample_indices):
     """Split samples into left and right arrays.
 
     Parameters
@@ -303,6 +307,59 @@ def split_indices(context, split_info, sample_indices):
 
     return (sample_indices[:right_child_position],
             sample_indices[right_child_position:])
+
+@njit(parallel=False)
+def split_indices_single_thread(context, split_info, sample_indices):
+    """Split samples into left and right arrays.
+
+    This implementation requires less memory than the parallel version.
+
+    Parameters
+    ----------
+    context : SplittingContext
+        The splitting context
+    split_ingo : SplitInfo
+        The SplitInfo of the node to split
+    sample_indices : array of int
+        The indices of the samples at the node to split. This is a view on
+        context.partition, and it is modified inplace by placing the indices
+        of the left child at the beginning, and the indices of the right child
+        at the end.
+
+    Returns
+    -------
+    left_indices : array of int
+        The indices of the samples in the left child. This is a view on
+        context.partition.
+    right_indices : array of int
+        The indices of the samples in the right child. This is a view on
+        context.partition.
+    """
+    X_binned = context.X_binned.T[split_info.feature_idx]
+    n_samples = sample_indices.shape[0]
+
+    # approach from left with i
+    i = 0
+    # approach from right with j
+    j = n_samples - 1
+    X = X_binned
+    pivot = split_info.bin_idx
+    while i != j:
+        # continue until we find an element that should be on right
+        while X[sample_indices[i]] <= pivot and i < n_samples:
+            i += 1
+        # same, but now an element that should be on the left
+        while X[sample_indices[j]] > pivot and j >= 0:
+            j -= 1
+        if i >= j:  # j can become smaller than j!
+            break
+        else:
+            # swap
+            sample_indices[i], sample_indices[j] = sample_indices[j], sample_indices[i]
+            i += 1
+            j -= 1
+    return (sample_indices[:i],
+            sample_indices[i:])
 
 
 @njit(parallel=True)
