@@ -222,7 +222,7 @@ class BaseGradientBoostingMachine(BaseEstimator, ABC):
                 # whole array.
 
                 grower = TreeGrower(
-                    X_binned_train, gradients_at_k, hessians_at_k,
+                    X_binned_train, gradients_at_k.copy(), hessians_at_k,
                     max_bins=self.max_bins,
                     n_bins_per_feature=self.bin_mapper_.n_bins_per_feature_,
                     max_leaf_nodes=self.max_leaf_nodes,

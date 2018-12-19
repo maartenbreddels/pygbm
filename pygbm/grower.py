@@ -78,10 +78,11 @@ class TreeNode:
     apply_split_time = 0.
     hist_subtraction = False
 
-    def __init__(self, depth, sample_indices, sum_gradients,
+    def __init__(self, depth, sample_indices, gradient, sum_gradients,
                  sum_hessians, parent=None):
         self.depth = depth
         self.sample_indices = sample_indices
+        self.gradient = gradient
         self.n_samples = sample_indices.shape[0]
         self.sum_gradients = sum_gradients
         self.sum_hessians = sum_hessians
@@ -246,8 +247,9 @@ class TreeGrower:
             hessian = self.splitting_context.hessians.sum()
         self.root = TreeNode(
             depth=depth,
-            sample_indices=self.splitting_context.partition.view(),
-            sum_gradients=self.splitting_context.gradients.sum(),
+            gradient=self.splitting_context.ordered_gradients,
+            sample_indices=self.splitting_context.partition,#.view(),
+            sum_gradients=self.splitting_context.ordered_gradients.sum(),
             sum_hessians=hessian
         )
         if (self.max_leaf_nodes is not None and self.max_leaf_nodes == 1):
@@ -295,11 +297,11 @@ class TreeGrower:
             tic = time()
             if node.hist_subtraction:
                 split_info, histograms = find_node_split_subtraction(
-                    self.splitting_context, node.sample_indices,
+                    self.splitting_context, node.sample_indices, node.gradient,
                     node.parent.histograms, node.sibling.histograms)
             else:
                 split_info, histograms = find_node_split(
-                    self.splitting_context, node.sample_indices)
+                    self.splitting_context, node.sample_indices, node.gradient)
             toc = time()
             node.find_split_time = toc - tic
             self.total_find_split_time += node.find_split_time
@@ -340,8 +342,8 @@ class TreeGrower:
 
         tic = time()
         split_indices = split_indices_parallel if self.parallel_splitting else split_indices_single_thread
-        (sample_indices_left, sample_indices_right) = split_indices(
-            self.splitting_context, node.split_info, node.sample_indices)
+        (sample_indices_left, gradient_left), (sample_indices_right, gradient_right) = split_indices(
+            self.splitting_context, node.split_info, node.sample_indices, node.gradient)
         toc = time()
         node.apply_split_time = toc - tic
         self.total_apply_split_time += node.apply_split_time
@@ -352,11 +354,13 @@ class TreeGrower:
 
         left_child_node = TreeNode(depth,
                                    sample_indices_left,
+                                   gradient_left,
                                    node.split_info.gradient_left,
                                    node.split_info.hessian_left,
                                    parent=node)
         right_child_node = TreeNode(depth,
                                     sample_indices_right,
+                                    gradient_right,
                                     node.split_info.gradient_right,
                                     node.split_info.hessian_right,
                                     parent=node)
