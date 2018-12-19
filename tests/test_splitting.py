@@ -43,7 +43,7 @@ def test_histogram_split(n_bins):
                                        True)
 
             split_info, _ = _find_histogram_split(context, feature_idx,
-                                                  sample_indices)
+                                                  sample_indices, all_gradients)
 
             assert split_info.bin_idx == true_bin
             assert split_info.gain >= 0
@@ -92,10 +92,18 @@ def test_split_vs_split_subtraction(constant_hessian):
     sample_indices_left = sample_indices[mask]
     sample_indices_right = sample_indices[~mask]
 
+    gradient_left = all_gradients[sample_indices_left]
+    gradient_right = all_gradients[sample_indices_right]
+    if constant_hessian:
+        hessians_left = hessians_right = all_hessians
+    else:
+        hessians_left = all_hessians[sample_indices_left]
+        hessians_right = all_hessians[sample_indices_right]
+
     # first split parent, left and right with classical method
-    si_parent, hists_parent = find_node_split(context, sample_indices)
-    si_left, hists_left = find_node_split(context, sample_indices_left)
-    si_right, hists_right = find_node_split(context, sample_indices_right)
+    si_parent, hists_parent = find_node_split(context, sample_indices, all_gradients, all_hessians)
+    si_left, hists_left = find_node_split(context, sample_indices_left, gradient_left, hessians_left)
+    si_right, hists_right = find_node_split(context, sample_indices_right, gradient_right, hessians_right)
 
     # split left with subtraction method
     si_left_sub, hists_left_sub = find_node_split_subtraction(

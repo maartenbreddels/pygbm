@@ -78,11 +78,12 @@ class TreeNode:
     apply_split_time = 0.
     hist_subtraction = False
 
-    def __init__(self, depth, sample_indices, gradient, sum_gradients,
+    def __init__(self, depth, sample_indices, gradients, hessians, sum_gradients,
                  sum_hessians, parent=None):
         self.depth = depth
         self.sample_indices = sample_indices
-        self.gradient = gradient
+        self.gradients = gradients
+        self.hessians = hessians
         self.n_samples = sample_indices.shape[0]
         self.sum_gradients = sum_gradients
         self.sum_hessians = sum_hessians
@@ -242,15 +243,16 @@ class TreeGrower:
         n_samples = self.X_binned.shape[0]
         depth = 0
         if self.splitting_context.constant_hessian:
-            hessian = self.splitting_context.hessians[0] * n_samples
+            sum_hessian = self.splitting_context.ordered_hessians[0] * n_samples
         else:
-            hessian = self.splitting_context.hessians.sum()
+            sum_hessian = self.splitting_context.ordered_hessians.sum()
         self.root = TreeNode(
             depth=depth,
-            gradient=self.splitting_context.ordered_gradients,
+            gradients=self.splitting_context.ordered_gradients,
+            hessians=self.splitting_context.ordered_hessians,
             sample_indices=self.splitting_context.partition,#.view(),
             sum_gradients=self.splitting_context.ordered_gradients.sum(),
-            sum_hessians=hessian
+            sum_hessians=sum_hessian
         )
         if (self.max_leaf_nodes is not None and self.max_leaf_nodes == 1):
             self._finalize_leaf(self.root)
@@ -297,11 +299,12 @@ class TreeGrower:
             tic = time()
             if node.hist_subtraction:
                 split_info, histograms = find_node_split_subtraction(
-                    self.splitting_context, node.sample_indices, node.gradient,
+                    self.splitting_context, node.sample_indices,
                     node.parent.histograms, node.sibling.histograms)
             else:
                 split_info, histograms = find_node_split(
-                    self.splitting_context, node.sample_indices, node.gradient)
+                    self.splitting_context, node.sample_indices, node.gradients,
+                    node.hessians)
             toc = time()
             node.find_split_time = toc - tic
             self.total_find_split_time += node.find_split_time
@@ -342,8 +345,9 @@ class TreeGrower:
 
         tic = time()
         split_indices = split_indices_parallel if self.parallel_splitting else split_indices_single_thread
-        (sample_indices_left, gradient_left), (sample_indices_right, gradient_right) = split_indices(
-            self.splitting_context, node.split_info, node.sample_indices, node.gradient)
+        (sample_indices_left, gradients_left, hessians_left), \
+        (sample_indices_right, gradients_right, hessians_right) = split_indices(
+            self.splitting_context, node.split_info, node.sample_indices, node.gradients, node.hessians)
         toc = time()
         node.apply_split_time = toc - tic
         self.total_apply_split_time += node.apply_split_time
@@ -354,13 +358,15 @@ class TreeGrower:
 
         left_child_node = TreeNode(depth,
                                    sample_indices_left,
-                                   gradient_left,
+                                   gradients_left,
+                                   hessians_left,
                                    node.split_info.gradient_left,
                                    node.split_info.hessian_left,
                                    parent=node)
         right_child_node = TreeNode(depth,
                                     sample_indices_right,
-                                    gradient_right,
+                                    gradients_right,
+                                    hessians_right,
                                     node.split_info.gradient_right,
                                     node.split_info.hessian_right,
                                     parent=node)

@@ -75,8 +75,6 @@ class SplitInfo:
     ('n_bins_per_feature', uint32[::1]),
     ('min_samples_leaf', uint32),
     ('min_gain_to_split', float32),
-    # ('gradients', float32[::1]),
-    ('hessians', float32[::1]),
     ('ordered_gradients', float32[::1]),
     ('ordered_hessians', float32[::1]),
     ('sum_gradients', float32),
@@ -137,13 +135,11 @@ class SplittingContext:
         # last bins may be unused if n_bins_per_feature[f] < max_bins
         self.max_bins = max_bins
         self.n_bins_per_feature = n_bins_per_feature
-        # self.gradients = gradients
-        self.hessians = hessians
         # for root node, gradients and hessians are already ordered
-        self.ordered_gradients = gradients#.copy() in place moving
-        self.ordered_hessians = hessians.copy()
+        self.ordered_gradients = gradients  # will be reordered in place like partiton
+        self.ordered_hessians = hessians  # same as gradient
         self.sum_gradients = self.ordered_gradients.sum()
-        self.sum_hessians = self.hessians.sum()
+        self.sum_hessians = self.ordered_hessians.sum()
         self.constant_hessian = hessians.shape[0] == 1
         self.l2_regularization = l2_regularization
         self.min_hessian_to_split = min_hessian_to_split
@@ -151,7 +147,7 @@ class SplittingContext:
         self.min_gain_to_split = min_gain_to_split
         self.parallel_splitting = parallel_splitting
         if self.constant_hessian:
-            self.constant_hessian_value = self.hessians[0]  # 1 scalar
+            self.constant_hessian_value = self.ordered_hessians[0]  # 1 scalar
         else:
             self.constant_hessian_value = float32(1.)  # won't be used anyway
 
@@ -308,33 +304,16 @@ def split_indices_parallel(context, split_info, sample_indices):
     return (sample_indices[:right_child_position],
             sample_indices[right_child_position:])
 
+def split_indices_single_thread(context, split_info, sample_indices, gradients, hessians):
+    f = _split_indices_single_thread_with_hessian if context.constant_hessian else _split_indices_single_thread_with_hessian
+    return f(context, split_info, sample_indices, gradients, hessians)
+
 @njit(parallel=False)
-def split_indices_single_thread(context, split_info, sample_indices, gradient):
+def _split_indices_single_thread_with_hessian(context, split_info, sample_indices, gradients, hessians):
     """Split samples into left and right arrays.
 
-    This implementation requires less memory than the parallel version.
+    This implementation requires less memory than the parallel version."""
 
-    Parameters
-    ----------
-    context : SplittingContext
-        The splitting context
-    split_ingo : SplitInfo
-        The SplitInfo of the node to split
-    sample_indices : array of int
-        The indices of the samples at the node to split. This is a view on
-        context.partition, and it is modified inplace by placing the indices
-        of the left child at the beginning, and the indices of the right child
-        at the end.
-
-    Returns
-    -------
-    left_indices : array of int
-        The indices of the samples in the left child. This is a view on
-        context.partition.
-    right_indices : array of int
-        The indices of the samples in the right child. This is a view on
-        context.partition.
-    """
     X_binned = context.X_binned.T[split_info.feature_idx]
     n_samples = sample_indices.shape[0]
     # ordered_gradients = context.ordered_gradients
@@ -357,15 +336,39 @@ def split_indices_single_thread(context, split_info, sample_indices, gradient):
         else:
             # swap
             sample_indices[i], sample_indices[j] = sample_indices[j], sample_indices[i]
-            # gradient[sample_indices[i]], gradient[sample_indices[j]] = gradient[sample_indices[j]], gradient[sample_indices[i]]
-            gradient[i], gradient[j] = gradient[sample_indices[j]], gradient[sample_indices[i]]
+            gradients[i], gradients[j] = gradients[j], gradients[i]
+            hessians[i], hessians[j] = hessians[j], hessians[i]
             i += 1
             j -= 1
-    return (sample_indices[:i], gradient[:i]), (sample_indices[i:], gradient[i:])
+
+    return (sample_indices[:i], gradients[:i], hessians[:i]), (sample_indices[i:], gradients[i:], hessians[i:])
+
+@njit(parallel=False)
+def _split_indices_single_thread_const_hessian(context, split_info, sample_indices, gradients, hessians):
+    X_binned = context.X_binned.T[split_info.feature_idx]
+    n_samples = sample_indices.shape[0]
+    i = 0
+    j = n_samples - 1
+    X = X_binned
+    pivot = split_info.bin_idx
+    while i != j:
+        while X[sample_indices[i]] <= pivot and i < n_samples:
+            i += 1
+        while X[sample_indices[j]] > pivot and j >= 0:
+            j -= 1
+        if i >= j:
+            break
+        else:
+            sample_indices[i], sample_indices[j] = sample_indices[j], sample_indices[i]
+            gradients[i], gradients[j] = gradients[j], gradients[i]
+            i += 1
+            j -= 1
+    return (sample_indices[:i], gradients[:i], context.constant_hessian), (sample_indices[i:], gradients[i:], context.constant_hessian)
+
 
 
 @njit(parallel=True)
-def find_node_split(context, sample_indices, gradient):
+def find_node_split(context, sample_indices, gradients, hessians):
     """For each feature, find the best bin to split on at a given node.
 
     Returns the best split info among all features, and the histograms of
@@ -402,23 +405,20 @@ def find_node_split(context, sample_indices, gradient):
     # # This is a parallelized version of the following vanilla code:
     # # for i range(n_samples):
     # #     ctx.ordered_gradients[i] = ctx.gradients[samples_indices[i]]
-    # if sample_indices.shape[0] != ctx.gradients.shape[0]:
+    # if sample_indices.shape[0] != ctx.ordered_gradients.shape[0]:
     #     starts, ends, n_threads = get_threads_chunks(n_samples)
     #     if ctx.constant_hessian:
-    #         for thread_idx in prange(n_threads):
-    #             for i in range(starts[thread_idx], ends[thread_idx]):
-    #                 ordered_gradients[i] = ctx.gradients[sample_indices[i]]
+    #         pass
     #     else:
     #         for thread_idx in prange(n_threads):
     #             for i in range(starts[thread_idx], ends[thread_idx]):
-    #                 ordered_gradients[i] = ctx.gradients[sample_indices[i]]
     #                 ordered_hessians[i] = ctx.hessians[sample_indices[i]]
 
-    ctx.sum_gradients = gradient.sum() # isn't this already stored?
+    ctx.sum_gradients = gradients.sum() # isn't this already stored?
     if ctx.constant_hessian:
         ctx.sum_hessians = ctx.constant_hessian_value * float32(n_samples)
     else:
-        ctx.sum_hessians = ctx.ordered_hessians[:n_samples].sum()
+        ctx.sum_hessians = hessians.sum()
 
     # Pre-allocate the results datastructure to be able to use prange:
     # numba jitclass do not seem to properly support default values for kwargs.
@@ -430,7 +430,7 @@ def find_node_split(context, sample_indices, gradient):
     )
     for feature_idx in prange(context.n_features):
         split_info, histogram = _find_histogram_split(
-            context, feature_idx, sample_indices, gradient)
+            context, feature_idx, sample_indices, gradients, hessians)
         split_infos[feature_idx] = split_info
         histograms[feature_idx, :] = histogram
 
@@ -439,8 +439,8 @@ def find_node_split(context, sample_indices, gradient):
 
 
 @njit(parallel=True)
-def find_node_split_subtraction(context, sample_indices, gradient, parent_histograms,
-                                sibling_histograms):
+def find_node_split_subtraction(context, sample_indices,
+                                parent_histograms, sibling_histograms):
     """For each feature, find the best bin to split on at a given node.
 
     Returns the best split info among all features, and the histograms of
@@ -522,7 +522,7 @@ def _find_best_feature_to_split_helper(split_infos):
 
 
 @njit(fastmath=True)
-def _find_histogram_split(context, feature_idx, sample_indices, gradient):
+def _find_histogram_split(context, feature_idx, sample_indices, gradients, hessians):
     """Compute the histogram for a given feature
 
     Returns the best SplitInfo among all the possible bins of the feature.
@@ -531,26 +531,24 @@ def _find_histogram_split(context, feature_idx, sample_indices, gradient):
     X_binned = context.X_binned.T[feature_idx]
 
     root_node = X_binned.shape[0] == n_samples
-    # ordered_gradients = context.ordered_gradients[:n_samples]
-    ordered_hessians = context.ordered_hessians[:n_samples]
 
     if root_node:
         if context.constant_hessian:
             histogram = _build_histogram_root_no_hessian(
-                context.max_bins, X_binned, gradient)
+                context.max_bins, X_binned, gradients)
         else:
             histogram = _build_histogram_root(
-                context.max_bins, X_binned, gradient,
-                context.ordered_hessians)
+                context.max_bins, X_binned, gradients,
+                hessians)
     else:
         if context.constant_hessian:
             histogram = _build_histogram_no_hessian(
                 context.max_bins, sample_indices, X_binned,
-                gradient)
+                gradients)
         else:
             histogram = _build_histogram(
                 context.max_bins, sample_indices, X_binned,
-                gradient, ordered_hessians)
+                gradients, hessians)
 
     return _find_best_bin_to_split_helper(context, feature_idx, histogram,
                                           n_samples)
