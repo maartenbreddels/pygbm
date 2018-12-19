@@ -86,6 +86,8 @@ class SplitInfo:
     ('partition', uint32[::1]),
     ('left_indices_buffer', uint32[::1]),
     ('right_indices_buffer', uint32[::1]),
+    ('gradients_buffer', float32[::1]),
+    ('hessians_buffer', float32[::1]),
     ('parallel_splitting', bool_)
 ])
 class SplittingContext:
@@ -167,12 +169,15 @@ class SplittingContext:
             self.right_indices_buffer = np.empty_like(self.partition)
             self.left_indices_buffer = np.empty_like(self.partition)
 
+            self.gradients_buffer = np.empty_like(self.ordered_gradients)
+            self.hessians_buffer = np.empty_like(self.ordered_hessians)
+
 
 @njit(parallel=True,
       locals={'sample_idx': uint32,
               'left_count': uint32,
               'right_count': uint32})
-def split_indices_parallel(context, split_info, sample_indices):
+def split_indices_parallel(context, split_info, sample_indices, gradients, hessians):
     """Split samples into left and right arrays.
 
     Parameters
@@ -301,8 +306,43 @@ def split_indices_parallel(context, split_info, sample_indices):
             sample_indices[right_offset[thread_idx] + i] = \
                 right_indices_buffer[offset_in_buffers[thread_idx] + i]
 
-    return (sample_indices[:right_child_position],
-            sample_indices[right_child_position:])
+    gradients_buffer = context.gradients_buffer
+    # ordered_gradients = context.gradients_buffer
+    hessians_buffer = context.hessians_buffer
+    # ordered_gradients = context.gradients_buffer
+    if 1:
+        # gradients[:] = gradients[]
+        # starts, ends, n_threads = get_threads_chunks(n_samples)
+        starts, ends, n_threads = get_threads_chunks(n_samples)
+        for thread_idx in prange(n_threads):
+            for i in range(starts[thread_idx], ends[thread_idx]):   
+                gradients_buffer[i] = gradients[i]
+        # then reorder
+        for thread_idx in prange(n_threads):
+            for i in range(starts[thread_idx], ends[thread_idx]):
+                # TODO: bug, mixing global and local indices
+                gradients[i] = gradients_buffer[sample_indices[i]]
+        gradients_left = gradients[:right_child_position]
+        gradients_right = gradients[right_child_position:]
+        # TODO: numba does not like different return types
+        # if context.constant_hessian:
+        #     hessians_right = hessians_left = context.constant_hessian_value
+        # else:
+        if 1:
+            for thread_idx in prange(n_threads):
+                for i in range(starts[thread_idx], ends[thread_idx]):   
+                    hessians_buffer[i] = hessians[i]
+            # then reorder
+            for thread_idx in prange(n_threads):
+                for i in range(starts[thread_idx], ends[thread_idx]):
+                    # TODO: bug, mixing global and local indices
+                    hessians[i] = hessians_buffer[sample_indices[i]]
+            hessians_left = hessians[:right_child_position]
+            hessians_right = hessians[right_child_position:]
+
+
+    return (sample_indices[:right_child_position], gradients_left, hessians_left),\
+            (sample_indices[right_child_position:], gradients_right, hessians_right)
 
 def split_indices_single_thread(context, split_info, sample_indices, gradients, hessians):
     f = _split_indices_single_thread_with_hessian if context.constant_hessian else _split_indices_single_thread_with_hessian
