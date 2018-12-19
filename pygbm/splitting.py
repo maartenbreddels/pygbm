@@ -171,35 +171,39 @@ class SplittingContext:
             self.right_indices_buffer = np.empty_like(self.partition)
             self.left_indices_buffer = np.empty_like(self.partition)
 
+    def split_indices(self, split_info, sample_indices):
+        """Split samples into left and right arrays.
+
+        Parameters
+        ----------
+        split_info : SplitInfo
+            The SplitInfo of the node to split
+        sample_indices : array of int
+            The indices of the samples at the node to split. This is a view on
+            context.partition, and it is modified inplace by placing the indices
+            of the left child at the beginning, and the indices of the right child
+            at the end.
+
+        Returns
+        -------
+        left_indices : array of int
+            The indices of the samples in the left child. This is a view on
+            context.partition.
+        right_indices : array of int
+            The indices of the samples in the right child. This is a view on
+            context.partition.
+        """
+        if self.parallel_splitting:
+            return _split_indices_parallel(self, split_info, sample_indices)
+        else:
+            return _split_indices_single_threaded(self, split_info, sample_indices)
+
 
 @njit(parallel=True,
       locals={'sample_idx': uint32,
               'left_count': uint32,
               'right_count': uint32})
-def split_indices_parallel(context, split_info, sample_indices):
-    """Split samples into left and right arrays.
-
-    Parameters
-    ----------
-    context : SplittingContext
-        The splitting context
-    split_ingo : SplitInfo
-        The SplitInfo of the node to split
-    sample_indices : array of int
-        The indices of the samples at the node to split. This is a view on
-        context.partition, and it is modified inplace by placing the indices
-        of the left child at the beginning, and the indices of the right child
-        at the end.
-
-    Returns
-    -------
-    left_indices : array of int
-        The indices of the samples in the left child. This is a view on
-        context.partition.
-    right_indices : array of int
-        The indices of the samples in the right child. This is a view on
-        context.partition.
-    """
+def _split_indices_parallel(context, split_info, sample_indices):
     # This is a multi-threaded implementation inspired by lightgbm.
     # Here is a quick break down. Let's suppose we want to split a node with
     # 24 samples named from a to x. context.partition looks like this (the *
@@ -309,47 +313,20 @@ def split_indices_parallel(context, split_info, sample_indices):
             sample_indices[right_child_position:])
 
 @njit(parallel=False)
-def split_indices_single_thread(context, split_info, sample_indices):
-    """Split samples into left and right arrays.
-
-    This implementation requires less memory than the parallel version.
-
-    Parameters
-    ----------
-    context : SplittingContext
-        The splitting context
-    split_ingo : SplitInfo
-        The SplitInfo of the node to split
-    sample_indices : array of int
-        The indices of the samples at the node to split. This is a view on
-        context.partition, and it is modified inplace by placing the indices
-        of the left child at the beginning, and the indices of the right child
-        at the end.
-
-    Returns
-    -------
-    left_indices : array of int
-        The indices of the samples in the left child. This is a view on
-        context.partition.
-    right_indices : array of int
-        The indices of the samples in the right child. This is a view on
-        context.partition.
-    """
-    X_binned = context.X_binned.T[split_info.feature_idx]
+def _split_indices_single_threaded(context, split_info, sample_indices):
+    binned_feature = context.X_binned.T[split_info.feature_idx]
     n_samples = sample_indices.shape[0]
-
     # approach from left with i
     i = 0
     # approach from right with j
     j = n_samples - 1
-    X = X_binned
     pivot = split_info.bin_idx
     while i != j:
         # continue until we find an element that should be on right
-        while X[sample_indices[i]] <= pivot and i < n_samples:
+        while binned_feature[sample_indices[i]] <= pivot and i < n_samples:
             i += 1
         # same, but now an element that should be on the left
-        while X[sample_indices[j]] > pivot and j >= 0:
+        while binned_feature[sample_indices[j]] > pivot and j >= 0:
             j -= 1
         if i >= j:  # j can become smaller than j!
             break
@@ -358,8 +335,7 @@ def split_indices_single_thread(context, split_info, sample_indices):
             sample_indices[i], sample_indices[j] = sample_indices[j], sample_indices[i]
             i += 1
             j -= 1
-    return (sample_indices[:i],
-            sample_indices[i:])
+    return (sample_indices[:i], sample_indices[i:])
 
 
 @njit(parallel=True)

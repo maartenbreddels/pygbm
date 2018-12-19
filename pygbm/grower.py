@@ -8,8 +8,7 @@ from heapq import heappush, heappop
 import numpy as np
 from time import time
 
-from .splitting import (SplittingContext, split_indices_parallel,
-                        split_indices_single_thread, find_node_split,
+from .splitting import (SplittingContext, find_node_split,
                         find_node_split_subtraction)
 from .predictor import TreePredictor, PREDICTOR_RECORD_DTYPE
 
@@ -189,7 +188,6 @@ class TreeGrower:
         self.X_binned = X_binned
         self.min_gain_to_split = min_gain_to_split
         self.shrinkage = shrinkage
-        self.parallel_splitting = parallel_splitting
         self.splittable_nodes = []
         self.finalized_leaves = []
         self.total_find_split_time = 0.  # time spent finding the best splits
@@ -339,9 +337,9 @@ class TreeGrower:
         node = heappop(self.splittable_nodes)
 
         tic = time()
-        split_indices = split_indices_parallel if self.parallel_splitting else split_indices_single_thread
-        (sample_indices_left, sample_indices_right) = split_indices(
-            self.splitting_context, node.split_info, node.sample_indices)
+        (sample_indices_left, sample_indices_right) = \
+            self.splitting_context.split_indices(node.split_info,
+                                                 node.sample_indices)
         toc = time()
         node.apply_split_time = toc - tic
         self.total_apply_split_time += node.apply_split_time

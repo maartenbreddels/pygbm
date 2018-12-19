@@ -6,7 +6,7 @@ import pytest
 from pygbm.splitting import _find_histogram_split
 from pygbm.splitting import (SplittingContext, find_node_split,
                              find_node_split_subtraction,
-                             split_indices_parallel, split_indices_single_thread)
+                             _split_indices_parallel, _split_indices_single_threaded)
 
 
 @pytest.mark.parametrize('n_bins', [3, 32, 256])
@@ -271,8 +271,8 @@ def test_split_indices():
     assert si_root.feature_idx == 1
     assert si_root.bin_idx == 3
 
-    samples_left, samples_right = split_indices_parallel(
-        context, si_root, context.partition.view())
+    samples_left, samples_right = context.split_indices(
+        si_root, context.partition.view())
     assert set(samples_left) == set([0, 1, 3, 4, 5, 6, 8])
     assert set(samples_right) == set([2, 7, 9])
 
@@ -288,8 +288,9 @@ def test_split_indices():
     assert samples_left.shape[0] == si_root.n_samples_left
     assert samples_right.shape[0] == si_root.n_samples_right
 
-    samples_left_single_thread, samples_right_single_thread = split_indices_single_thread(
-        context, si_root, context.partition.view())
+    # test if the single thread version gives the same result
+    samples_left_single_thread, samples_right_single_thread = \
+        _split_indices_single_threaded(context, si_root, context.partition.view())
 
     assert samples_left.tolist() == samples_left_single_thread.tolist()
     assert samples_right.tolist() == samples_right_single_thread.tolist()
