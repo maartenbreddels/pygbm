@@ -21,6 +21,7 @@ parser.add_argument('--no-lightgbm', action="store_true", default=False)
 parser.add_argument('--learning-rate', type=float, default=1.)
 parser.add_argument('--subsample', type=int, default=None)
 parser.add_argument('--max-bins', type=int, default=255)
+parser.add_argument('--no-parallel-split', action="store_true", default=False)
 args = parser.parse_args()
 
 HERE = os.path.dirname(__file__)
@@ -85,7 +86,8 @@ pygbm_model = GradientBoostingClassifier(loss='binary_crossentropy',
                                          max_leaf_nodes=n_leaf_nodes,
                                          n_iter_no_change=None,
                                          random_state=0,
-                                         verbose=1, parallel_splitting=False)
+                                         verbose=1,
+                                         parallel_splitting=not args.no_parallel_split)
 pygbm_model.fit(data_train, target_train)
 toc = time()
 predicted_test = pygbm_model.predict(data_test)
